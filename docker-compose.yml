@@ -1,0 +1,140 @@
+version: "3.9"
+networks:
+  laravel:
+    name: main_network
+    driver: bridge
+    attachable: true
+
+services:
+  apache:
+    container_name: "apache"
+    build:
+      context: ./dockerfiles
+      dockerfile: apache.dockerfile
+      args:
+        - UID=${UID:-1000}
+        - GID=${GID:-1000}
+    ports:
+      - "${ANOMALY_API_PORT:-3140}:3140"
+      - "${ANOMALY_WEB_PORT:-3141}:3141"
+    volumes:
+      - .:/var/www/html:delegated
+      - ./dockerfiles/configs/sites-enabled/:/etc/apache2/sites-enabled/ # Mount entire sites-enabled directory
+    depends_on:
+      - php
+      #      - redis
+      - mariadb
+    networks:
+      - laravel
+    restart: unless-stopped
+
+  mariadb:
+    container_name: "mariadb"
+    image: mariadb:11.4
+    restart: unless-stopped
+    tty: true
+    ports:
+      - "${FORWARD_DB_PORT:-3306}:3306"
+    volumes:
+      #            - ./mariadb:/var/www/html:delegated #for development
+      - mariadb:/var/lib/mysql #for production
+      - ./mariadb/docker-entrypoint-initdb.d/:/docker-entrypoint-initdb.d
+      - ./dockerfiles/configs/my.cnf:/etc/mysql/my.cnf
+    environment:
+      MYSQL_DATABASE: "${DB_DATABASE}"
+      MYSQL_USER: "${DB_USERNAME}"
+      MYSQL_PASSWORD: "${DB_PASSWORD}"
+      MYSQL_ROOT_PASSWORD: "${DB_PASSWORD}"
+      SERVICE_TAGS: dev
+      SERVICE_NAME: mariadb
+      TZ: "Asia/Tokyo"
+    healthcheck:
+      test: [ "CMD", "healthcheck.sh", "--connect", "--innodb_initialized" ]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    networks:
+      - laravel
+
+  php:
+    container_name: "php"
+    build:
+      context: ./dockerfiles
+      dockerfile: php.dockerfile
+      args:
+        - UID=${UID:-1000}
+        - GID=${GID:-1000}
+    ports:
+      - "${FORWARD_PHP_PORT:-9000}:9000"
+    volumes:
+      - .:/var/www/html:delegated
+      - ./dockerfiles/configs/custom.ini:/usr/local/etc/php/conf.d/custom.ini
+      - ./dockerfiles/configs/opcache.ini:/usr/local/etc/php/conf.d/opcache.ini
+    restart: unless-stopped  # Add this line
+    networks:
+      - laravel
+    healthcheck: # Added health check
+      test: [ "CMD", "php-fpm", "-t" ]
+      retries: 3
+      timeout: 5s
+
+  supervisor:
+    build:
+      context: ./dockerfiles
+      dockerfile: supervisor.dockerfile
+    container_name: supervisor
+    ports:
+      - '${REVERB_SERVER_PORT:-8080}:8080'
+      - '${REVERB_DEMO_SERVER_PORT:-8090}:8090'
+    volumes:
+      - .:/var/www/html:delegated
+      - ./dockerfiles/configs/supervisord.conf:/etc/supervisor/supervisord.conf
+    depends_on:
+      - php
+    networks:
+      - laravel
+    restart: unless-stopped
+
+  phpmyadmin:
+    container_name: "phpmyadmin"
+    image: phpmyadmin:latest
+    restart: unless-stopped
+    ports:
+      - "${FORWARD_PHPMYADMIN_PORT:-8081}:80"
+    environment:
+      PMA_HOST: mariadb
+      PMA_PASSWORD: "${DB_PASSWORD}"
+      UPLOAD_LIMIT: 64M
+    depends_on:
+      - mariadb
+    networks:
+      - laravel
+
+  redis:
+    container_name: "redis"
+    image: redis:7.4-alpine
+    restart: unless-stopped
+    ports:
+      - "${FORWARD_REDIS_PORT:-6379}:6379"
+    healthcheck:
+      test: [ "CMD", "redis-cli", "ping" ]
+      retries: 3
+      timeout: 5s
+    networks:
+      - laravel
+
+  npm:
+    container_name: "npm"
+    image: node:18-alpine
+    volumes:
+      - .:/var/www/html
+    ports:
+      - "${FORWARD_NPM_PORT:-3000}:3000"
+    working_dir: /var/www/html
+    entrypoint: [ "npm" ]
+    networks:
+      - laravel
+
+volumes:
+  mariadb:
+    driver: local
