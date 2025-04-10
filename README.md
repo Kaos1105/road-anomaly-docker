@@ -1,4 +1,4 @@
-# SNET Deploy
+# Anomaly Detection System Deploy
 
 Using Docker Compose to build and deploy all SNET systems
 
